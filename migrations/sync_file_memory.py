@@ -47,8 +47,12 @@ def parse(path: Path):
     m = FRONT.match(text)
     if not m:
         return None
-    head, body = m.group(1), m.group(2).strip()
-    field = lambda k: (re.search(rf"^\s*{k}:\s*(.+)$", head, re.M) or [None, ""])[1].strip().strip('"')
+    head, body = m.group(1) or "", (m.group(2) or "").strip()
+
+    def field(k: str) -> str:
+        fm = re.search(rf"^\s*{k}:\s*(.+)$", head, re.M)
+        raw = fm.group(1) if fm else ""
+        return (raw or "").strip().strip('"')
     name, desc, ftype = field("name") or path.stem, field("description"), field("type") or "project"
     content = redact(f"{name}: {desc}\n\n{body}" if desc else f"{name}\n\n{body}")
     return {
@@ -81,10 +85,10 @@ def main() -> int:
         return 2
 
     import psycopg
-    from psycopg.rows import dict_row
+    from psycopg.rows import DictRow, dict_row
 
     records = list(collect())
-    with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
+    with psycopg.Connection[DictRow].connect(args.dsn, row_factory=dict_row) as conn:
         known = {r["k"]: r for r in conn.execute(
             "SELECT memory_id, metadata->>'key' k, metadata->>'sha' sha FROM memory_nodes "
             "WHERE metadata->>'source' = %s", (SOURCE,))}

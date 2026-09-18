@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 
 from brions_memory.encoder import Encoder
 
@@ -235,7 +235,7 @@ def main() -> int:
         return 0
 
     inserted = skipped = 0
-    with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
+    with psycopg.Connection[DictRow].connect(args.dsn, row_factory=dict_row) as conn:
         existing = {
             r["quantum_signature"]
             for r in conn.execute("SELECT quantum_signature FROM memory_nodes")
