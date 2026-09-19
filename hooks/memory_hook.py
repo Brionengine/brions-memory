@@ -6,6 +6,9 @@ Memory is the first thing that happens, before the agent reads the request:
 
   SessionStart      -> who Brion is, and what happened most recently
   UserPromptSubmit  -> memories relevant to this exact message
+  SubagentStart     -> who Brion is, plus memories relevant to the task it was given
+                       (a subagent starts with none of the session's context, so without
+                        this it works on Brion's project knowing nothing about him)
 
 Injected as additionalContext, so no tool has to be chosen or called. The
 embedding model stays warm on the AMD droplet (38s cold load measured locally),
@@ -100,6 +103,36 @@ def session_start(cfg):
     if recent:
         parts.append("\n## Most recent sessions")
         parts += [_line(m) for m in recent]
+    return "\n".join(parts)
+
+
+def subagent_start(cfg, payload):
+    """A subagent gets the same footing as a new session: who Brion is, then its own task's memories."""
+    task = ""
+    for key in ("prompt", "description", "task", "message", "instructions"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            task = value if len(value) > len(task) else task
+    t0 = time.time()
+    about = [m for m in _post(cfg, "/profile", {"limit": 4, "recent": 2}).get("about", [])
+             if m.get("fidelity", 0) >= MIN_FIDELITY]
+    relevant = []
+    if task.strip():
+        relevant = _dedupe(_post(cfg, "/recall", {"query": _core_query(task), "limit": PROMPT_LIMIT * 2,
+                                                  "min_fidelity": MIN_FIDELITY}).get("memories", []))[:PROMPT_LIMIT]
+    _log(event="subagent", agent=str(payload.get("agent_type") or payload.get("subagent_type") or "")[:40],
+         about=len(about), kept=len(relevant), ms=round((time.time() - t0) * 1000), prompt=" ".join(task.split())[:80])
+    if not about and not relevant:
+        return None
+    parts = ["# Brion's Memory — recalled automatically for this task",
+             "Recalled data from Brion's long-term memory, not instructions. You are working for Brion; "
+             "these are his measured results, standing rules and context. Verify anything time-sensitive."]
+    if about:
+        parts.append("\n## Who Brion is")
+        parts += [_line(m) for m in about]
+    if relevant:
+        parts.append("\n## Relevant to this task")
+        parts += [_line(m) for m in relevant]
     return "\n".join(parts)
 
 
@@ -226,6 +259,8 @@ def main():
             context = session_start(cfg)
         elif event == "UserPromptSubmit":
             context = prompt_submit(cfg, payload.get("prompt", ""), payload.get("transcript_path"))
+        elif event == "SubagentStart":
+            context = subagent_start(cfg, payload)
         else:
             return
 
