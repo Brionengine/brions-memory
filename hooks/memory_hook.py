@@ -46,6 +46,14 @@ FLOOR_HITS = 2
 CONTEXT_TURNS = 2         # earlier Brion messages folded into the contextual query
 CONTEXT_CHARS = 1500
 TAIL_BYTES = 2_000_000    # transcripts reach tens of MB; the last turns are at the end
+# Measured 2026-09-19: "do you remember X?" framing sinks X. The words about remembering outweigh the
+# fact in the embedding and pull memories *about memory*: "Can you remember what my PhD goal is?"
+# missed the PhD memory entirely while "Where do I want to go to grad school?" ranked it 1st.
+# 5 of 7 remember-phrased fact questions missed the top 6. The frame is stripped before searching.
+MEMORY_FRAME = re.compile(
+    r"\b(?:(?:can|could|do|did|would|will)\s+(?:you|u)\s+(?:still\s+|possibly\s+)?(?:remember|recall)"
+    r"|(?:you\s+)?remind\s+me(?:\s+(?:of|about))?|(?:do|did)\s+you\s+know|tell\s+me\s+again"
+    r"|i\s+(?:forgot|forget)|(?:please|pls)|(?:us|we)\s+(?:talked|spoke)\s+about)\b[\s,]*", re.I)
 # Questions about time or about the relationship itself cannot match by meaning.
 RECENT_INTENT = re.compile(
     r"\b(yesterday|last (time|session|night|week)|earlier|recently|previous(ly)?|"
@@ -152,6 +160,12 @@ def _log(**fields):
         pass
 
 
+def _core_query(prompt):
+    """The prompt without "do you remember"-style framing; the prompt itself if nothing is left."""
+    core = " ".join(MEMORY_FRAME.sub(" ", prompt).split()).strip(" ,?.!")
+    return core if len(core) >= 8 else prompt
+
+
 def _strong(memories):
     return sum(1 for m in memories if m.get("fidelity", 0) >= GOOD_FIDELITY)
 
@@ -164,7 +178,8 @@ def prompt_submit(cfg, prompt, transcript_path=None):
     t0 = time.time()
     # over-fetch so dedup can still fill PROMPT_LIMIT distinct slots
     ask = {"limit": PROMPT_LIMIT * 2, "min_fidelity": MIN_FIDELITY}
-    memories = _post(cfg, "/recall", {"query": prompt, **ask}).get("memories", [])
+    query = _core_query(prompt)
+    memories = _post(cfg, "/recall", {"query": query, **ask}).get("memories", [])
     direct = len(memories)
 
     contextual = 0
@@ -172,7 +187,7 @@ def prompt_submit(cfg, prompt, transcript_path=None):
         context = _conversation(transcript_path)
         if context:
             # prompt first and last so it still leads the embedding over the context
-            extra = _post(cfg, "/recall", {"query": f"{prompt}\n{context}\n{prompt}", **ask}).get("memories", [])
+            extra = _post(cfg, "/recall", {"query": f"{query}\n{context}\n{query}", **ask}).get("memories", [])
             have = {m.get("id") for m in memories}
             extra = [m for m in extra if m.get("id") not in have]
             contextual = len(extra)
