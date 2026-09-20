@@ -67,13 +67,13 @@ class Encoder:
         self.model_name = model_name
         self.quantum_dimension = quantum_dimension
         self.allow_fallback = allow_fallback
-        self._model = None
+        self._model: Optional[Any] = None
         self._model_failed = False
 
     # -- embedding ---------------------------------------------------------
 
     @property
-    def model(self):
+    def model(self) -> Optional[Any]:
         if self._model is None and not self._model_failed:
             try:
                 from sentence_transformers import SentenceTransformer
