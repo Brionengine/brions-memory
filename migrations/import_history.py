@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import psycopg
 from psycopg.rows import DictRow, dict_row
+from psycopg.types.json import Jsonb
 
 from brions_memory.encoder import Encoder
 
@@ -281,7 +282,11 @@ def main() -> int:
 def _flush(conn, encoder: Encoder, batch: List[Tuple]) -> int:
     """Embed the whole batch in one model call, then insert."""
     texts = [b[0] for b in batch]
-    vectors = encoder.model.encode(texts, batch_size=32, show_progress_bar=False)
+    model = encoder.model
+    if model is None:
+        vectors = [encoder.embed(text) for text in texts]
+    else:
+        vectors = model.encode(texts, batch_size=32, show_progress_bar=False)
 
     rows = []
     for (content, mtype, imp, created, project, meta, signature), vec in zip(batch, vectors):
@@ -298,9 +303,9 @@ def _flush(conn, encoder: Encoder, batch: List[Tuple]) -> int:
 
         rows.append((
             f"mem_{mtype}_{uuid.uuid4().hex[:8]}",
-            psycopg.types.json.Jsonb({"value": content}),
+            Jsonb({"value": content}),
             content, mtype, vec.tolist(), encoder.pack_state(state), len(state),
-            float(imp), signature, psycopg.types.json.Jsonb(meta or {}),
+            float(imp), signature, Jsonb(meta or {}),
             created or datetime.now(timezone.utc),
             created or datetime.now(timezone.utc),
             project, "import",
