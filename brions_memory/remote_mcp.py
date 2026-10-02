@@ -67,6 +67,7 @@ REFRESH_TTL = 30 * 86400
 CODE_TTL = 300
 MAX_BODY = 256 * 1024
 LOCKOUT_FAILS, LOCKOUT_WINDOW = 5, 900
+MAX_REGISTRATIONS_PER_WINDOW = 3
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +110,8 @@ class OAuthStore:
                                                   challenge TEXT, expires REAL);
                 CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, kind TEXT, client_id TEXT, expires REAL);
             """)
+            if "trusted" not in [r[1] for r in db.execute("PRAGMA table_info(clients)")]:
+                db.execute("ALTER TABLE clients ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0")
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
@@ -116,13 +119,25 @@ class OAuthStore:
     def register(self, redirect_uris: list) -> str:
         client_id = "bm_" + secrets.token_urlsafe(18)
         with self.lock, self._db() as db:
-            db.execute("INSERT INTO clients VALUES (?, ?, ?)", (client_id, json.dumps(redirect_uris), time.time()))
+            db.execute("INSERT INTO clients (client_id, redirect_uris, created) VALUES (?, ?, ?)",
+                       (client_id, json.dumps(redirect_uris), time.time()))
         return client_id
 
-    def client_redirects(self, client_id: str) -> Optional[list]:
+    def client(self, client_id: str) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute("SELECT redirect_uris FROM clients WHERE client_id = ?", (client_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+            row = db.execute("SELECT redirect_uris, created, trusted FROM clients WHERE client_id = ?",
+                             (client_id,)).fetchone()
+        return {"redirect_uris": json.loads(row[0]), "created": row[1], "trusted": bool(row[2])} if row else None
+
+    def registered_since(self, since: float) -> int:
+        with self._db() as db:
+            return db.execute("SELECT count(*) FROM clients WHERE created >= ?", (since,)).fetchone()[0]
+
+    def trust_only(self, client_id: str) -> int:
+        """Trust the client that just logged in and drop every never-used registration."""
+        with self.lock, self._db() as db:
+            db.execute("UPDATE clients SET trusted = 1 WHERE client_id = ?", (client_id,))
+            return db.execute("DELETE FROM clients WHERE trusted = 0").rowcount
 
     def issue_code(self, client_id: str, redirect_uri: str, challenge: str) -> str:
         code = secrets.token_urlsafe(32)
@@ -199,17 +214,23 @@ class RegistrationWindow:
         self.path = path
 
     def open_for(self, minutes: float) -> float:
-        expires = time.time() + minutes * 60
+        now = time.time()
+        expires = now + minutes * 60
         with open(self.path, "w") as fh:
-            fh.write(str(expires))
+            fh.write(f"{now} {expires}")
         return expires
 
-    def is_open(self) -> bool:
+    def opened_at(self) -> Optional[float]:
+        """When the current window opened, or None if registration is closed."""
         try:
             with open(self.path) as fh:
-                return float(fh.read().strip()) > time.time()
+                opened, expires = (float(x) for x in fh.read().split())
         except (OSError, ValueError):
-            return False
+            return None
+        return opened if expires > time.time() else None
+
+    def is_open(self) -> bool:
+        return self.opened_at() is not None
 
     def close(self) -> None:
         try:
@@ -329,13 +350,20 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
                 self._send(404, {"error": "not found"})
             except ValueError as exc:
                 self._send(400, {"error": "invalid_request", "error_description": str(exc)})
+            except Exception:                   # never drop the connection without an answer
+                logger.exception("unhandled error on POST %s", path)
+                self._send(500, {"error": "server_error"})
 
         def _register(self) -> None:
             meta = json.loads(self._body() or b"{}")
-            if not window.is_open():
+            opened = window.opened_at()
+            if opened is None:
                 logger.warning("registration refused (closed) from %s", self.headers.get("X-Forwarded-For", "?"))
                 return self._send(403, {"error": "access_denied",
                                         "error_description": "registration is closed; the owner must open it"})
+            if store.registered_since(opened) >= MAX_REGISTRATIONS_PER_WINDOW:
+                logger.warning("registration refused (window full) from %s", self.headers.get("X-Forwarded-For", "?"))
+                return self._send(403, {"error": "access_denied", "error_description": "registration window is full"})
             uris = meta.get("redirect_uris") or []
             if not uris or not all(isinstance(u, str) and _redirect_ok(u) for u in uris):
                 return self._send(400, {"error": "invalid_redirect_uri",
@@ -350,10 +378,15 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
         def _check_authz(self, p: Dict[str, str]) -> Optional[str]:
             if p.get("response_type") != "code":
                 return "response_type must be code"
-            redirects = store.client_redirects(p.get("client_id", ""))
-            if redirects is None:
+            client = store.client(p.get("client_id", ""))
+            if client is None:
                 return "unknown client"
-            if p.get("redirect_uri") not in redirects:
+            # A registration that never completed a login is only usable inside the window it was made in;
+            # otherwise one left over from an open window could be used for phishing long after.
+            opened = window.opened_at()
+            if not client["trusted"] and (opened is None or client["created"] < opened):
+                return "this connection request has expired; start again from ChatGPT"
+            if p.get("redirect_uri") not in client["redirect_uris"]:
                 return "redirect_uri not registered"
             if p.get("code_challenge_method") != "S256" or not p.get("code_challenge"):
                 return "PKCE S256 required"
@@ -403,7 +436,9 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
                 if (p.get("client_id") != client_id or p.get("redirect_uri") != redirect_uri
                         or not hmac.compare_digest(computed, challenge)):
                     return self._send(400, {"error": "invalid_grant"})
-                window.close()                  # connected: no more registrations until reopened
+                dropped = store.trust_only(client_id)   # this connector is Brion's now; drop unused ones
+                window.close()                          # and no more registrations until reopened
+                logger.info("client trusted; %d unused registration(s) removed; registration closed", dropped)
                 return self._send(200, store.issue_tokens(client_id))
             if grant == "refresh_token":
                 client_id = p.get("client_id", "")
