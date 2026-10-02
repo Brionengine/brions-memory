@@ -31,6 +31,7 @@ Three routes, so every AI Brion runs can remember, not only the one in front of 
 |---|---|---|
 | **Hooks** (`hooks/memory_hook.py`) | Claude Code, every project | Automatically, before the agent reads the request — `SessionStart`, `UserPromptSubmit`, and `SubagentStart`, so subagents start informed too |
 | **MCP server** (`brions_memory/mcp_server.py`) | Any MCP client (Claude Code, Claude Desktop, other agents) | When the AI chooses to call `recall` / `remember` |
+| **Remote MCP** (`brions_memory/remote_mcp.py`) | ChatGPT and any remote MCP client | Over HTTPS with OAuth: ChatGPT's connector login asks for Brion's passphrase. Read tools + `remember` only |
 | **Python client** (`brions_memory/memory_client.py`) | Everything else — local quantum agents, Brian, scheduled jobs | `from brions_memory.memory_client import context_block` |
 
 ```python
@@ -58,6 +59,14 @@ Since 2026-10-02 Claude Code runs as `brion`, not root: the venv is `~/.local/sh
 
 Re-registering the MCP server requires `PYTHONPATH="/mnt/c/Brion's Memory"`, or it only
 works when Claude Code is started from this directory.
+
+## Remote MCP for ChatGPT
+
+ChatGPT cannot launch a local server; its connectors take a public HTTPS URL with OAuth or nothing. `remote_mcp.py` is both the OAuth 2.1 server (discovery, dynamic registration restricted to ChatGPT/OpenAI redirect hosts, PKCE S256, rotating refresh tokens, hashed token storage, 5-try lockout) and the MCP endpoint (`POST /mcp`). Deployed as `brions-memory-remote.service` behind Caddy (Let's Encrypt) on an OVH AMD server; config in `/etc/brions-memory/remote.env` (mode 640), tokens in `/var/lib/brions-memory`. Caddy's access log drops query codes, `Authorization` and `Location`. Passphrase hash: `python -m brions_memory.remote_mcp --hash-passphrase '<passphrase>'`.
+
+In ChatGPT: Settings → Apps & Connectors → Advanced → Developer mode on → Create → URL `https://<host>/mcp`, Authentication **OAuth** → sign in with the passphrase.
+
+Codex (CLI and the Windows desktop app) uses the local stdio server instead, plus the same recall hooks: `[mcp_servers.brions-memory]` in `config.toml` and `SessionStart`/`UserPromptSubmit` in `hooks.json`.
 
 ## Decisions worth not relitigating
 
