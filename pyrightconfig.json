@@ -1,6 +1,4 @@
 {
-  "extraPaths": [
-    ".venv/lib/python3.13/site-packages",
-    ".venv/lib64/python3.13/site-packages"
-  ]
+  "venvPath": "/home/brion/.local/share/brions-memory",
+  "venv": "venv"
 }

@@ -63,6 +63,6 @@ works when Claude Code is started from this directory.
 
 - Memories are permanent (2026-09-13). Relevance is fidelity × importance weight and nothing
   time-based; importance never changes on its own and nothing deletes a memory except an explicit request.
-- No tool call destroys a memory (2026-10-02). `forget` and `update_memory` are reachable by an LLM that reads untrusted text, and a model-supplied confirm flag authorises nothing, so both copy the old row to `memory_archive` (`sql/002_memory_archive.sql`) and `restore_memory` undoes either.
+- No tool call destroys a memory (2026-10-02). `forget` and `update_memory` are reachable by an LLM that reads untrusted text, and a model-supplied confirm flag authorises nothing, so both copy the old row to `memory_archive` (`sql/002_memory_archive.sql`) and `restore_memory` undoes either. True erasure (e.g. a credential that ended up in a memory) is `python -m brions_memory.purge <memory_id>` — human-only, deliberately not an MCP tool.
 - Memory type is a query filter, not a phase in the quantum state (both phase variants measured badly).
 - Entanglement strength blends |cos|, not cos²; relevance uses importance/(1+importance).
