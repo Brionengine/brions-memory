@@ -39,7 +39,7 @@ from migrations.import_history import _json_list, redact  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("sync-qmem")
 
-QMEM_DB = os.environ.get("QMEM_DB", "/root/.qmem/qmem.db")
+QMEM_DB = os.environ.get("QMEM_DB", os.path.expanduser("~/.qmem/qmem.db"))
 OBS_SOURCE = "qmem/observations"
 SESSION_SOURCE = "session"
 SESSION_TITLES = 15

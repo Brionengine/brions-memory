@@ -26,8 +26,8 @@ import sys
 import time
 import urllib.request
 
-CONFIG = "/root/.config/brions-memory/client.json"
-LOG = "/root/.local/share/brions-memory/recall.log"
+CONFIG = os.path.expanduser("~/.config/brions-memory/client.json")
+LOG = os.path.expanduser("~/.local/share/brions-memory/recall.log")
 TIMEOUT_S = 2.0         # server answers in 100-300 ms; an outage costs at most 2s
 MIN_FIDELITY = 0.18       # measured: real matches 0.23-0.51, noise <= 0.106
 MAX_ITEM_CHARS = 600
