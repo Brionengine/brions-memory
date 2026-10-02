@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
@@ -78,6 +79,7 @@ class MemoryStore:
         self.node_name = node_name or socket.gethostname()
         self.pool = ConnectionPool(self.dsn, min_size=min_size, max_size=max_size,
                                    kwargs={"row_factory": dict_row}, open=True)
+        self._columns: Optional[List[str]] = None
 
     @staticmethod
     def _nearest(conn, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:
@@ -286,6 +288,7 @@ class MemoryStore:
             new_type = memory_type or row["memory_type"]
             if new_type not in MEMORY_TYPES:
                 raise ValueError(f"unknown memory_type {new_type!r}")
+            self._archive(conn, memory_id, "update")
             merged_meta = {**(row["metadata"] or {}), **(metadata or {})}
 
             if content is not None:
@@ -322,13 +325,73 @@ class MemoryStore:
         return True
 
     def delete(self, memory_id: str) -> bool:
-        """Delete a memory and its links, on explicit request only."""
+        """
+        Forget a memory: move it to memory_archive, then delete it and its links.
+
+        Recoverable with restore() -- forget is reachable by an LLM that reads
+        untrusted text, so no tool call may destroy a memory outright.
+        """
         with self.pool.connection() as conn:
+            if not self._archive(conn, memory_id, "forget"):
+                return False
+            conn.execute("DELETE FROM memory_nodes WHERE memory_id = %s", (memory_id,))
+        return True
+
+    # -- archive: nothing a tool does is unrecoverable --------------------
+
+    def _node_columns(self, conn) -> List[str]:
+        """memory_nodes' live columns; the table has drifted from 001_schema.sql."""
+        if self._columns is None:
+            self._columns = [r["column_name"] for r in conn.execute(
+                """SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'memory_nodes' ORDER BY ordinal_position"""
+            ).fetchall()]
+        return self._columns
+
+    def _archive(self, conn, memory_id: str, reason: str) -> bool:
+        cols = sql.SQL(", ").join(map(sql.Identifier, self._node_columns(conn)))
+        cur = conn.execute(
+            sql.SQL("""INSERT INTO memory_archive ({cols}, archive_reason)
+                       SELECT {cols}, %s FROM memory_nodes WHERE memory_id = %s""").format(cols=cols),
+            (reason, memory_id),
+        )
+        return cur.rowcount > 0
+
+    def archived(self, memory_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
+        """Archived versions, newest first: forgotten memories and pre-edit copies."""
+        with self.cursor() as cur:
+            return cur.execute(
+                """SELECT archive_id, memory_id, archive_reason, archived_at, memory_type, content_text
+                     FROM memory_archive
+                    WHERE (%(mid)s::text IS NULL OR memory_id = %(mid)s)
+                 ORDER BY archived_at DESC LIMIT %(limit)s""",
+                {"mid": memory_id, "limit": limit},
+            ).fetchall()
+
+    def restore(self, archive_id: int) -> str:
+        """
+        Put an archived version back as the live memory. If the memory exists
+        (it was edited since), the current version is archived first, so a
+        restore is itself undoable. Entanglements are rebuilt.
+        """
+        with self.pool.connection() as conn:
+            cols = self._node_columns(conn)
             row = conn.execute(
-                "DELETE FROM memory_nodes WHERE memory_id = %s RETURNING memory_id",
-                (memory_id,),
+                "SELECT memory_id FROM memory_archive WHERE archive_id = %s", (archive_id,)
             ).fetchone()
-        return row is not None
+            if row is None:
+                raise KeyError(f"no archive entry {archive_id}")
+            memory_id = row["memory_id"]
+            if self._archive(conn, memory_id, "restore"):
+                conn.execute("DELETE FROM memory_nodes WHERE memory_id = %s", (memory_id,))
+            ident = sql.SQL(", ").join(map(sql.Identifier, cols))
+            conn.execute(
+                sql.SQL("""INSERT INTO memory_nodes ({cols})
+                           SELECT {cols} FROM memory_archive WHERE archive_id = %s""").format(cols=ident),
+                (archive_id,),
+            )
+        self.entangle_new(memory_id)
+        return memory_id
 
     # -- reading -----------------------------------------------------------
 
