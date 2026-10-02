@@ -68,7 +68,7 @@ Registration is closed by default — otherwise anyone could register their own 
 
 In ChatGPT: Settings → Apps & Connectors → Advanced → Developer mode on → Create → URL `https://<host>/mcp`, Authentication **OAuth** → sign in with the passphrase.
 
-Codex (CLI and the Windows desktop app) uses the local stdio server instead, plus the same recall hooks: `[mcp_servers.brions-memory]` in `config.toml` and `SessionStart`/`UserPromptSubmit` in `hooks.json`.
+Codex (CLI and the Windows desktop app) gets memory as a **plugin**, `integrations/codex` (a local marketplace): the MCP server, the `SessionStart`/`UserPromptSubmit` recall hooks and a usage skill, launched through `wsl.exe -d kali-linux -u brion` so the same plugin works from Windows and from WSL. Install: add `[marketplaces.brions-memory]` (`source_type = "local"`, `source = "/mnt/c/Brion's Memory/integrations/codex"`) to `config.toml`, then `codex plugin add brions-memory@brions-memory` (with `CODEX_HOME=/mnt/c/Users/<you>/.codex` for the Windows app).
 
 ## Decisions worth not relitigating
 

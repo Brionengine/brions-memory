@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "brions-memory": {
+      "type": "stdio",
+      "command": "wsl.exe",
+      "args": ["-d", "kali-linux", "-u", "brion", "--", "/home/brion/.local/share/brions-memory/run-mcp.sh"],
+      "startup_timeout_sec": 90,
+      "tool_timeout_sec": 120
+    }
+  }
+}

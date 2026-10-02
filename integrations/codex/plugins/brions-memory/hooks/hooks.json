@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wsl.exe -d kali-linux -u brion -- python3 \"/mnt/c/Brion's Memory/hooks/memory_hook.py\" SessionStart",
+            "timeout": 8,
+            "statusMessage": "Recalling from Brion's Memory"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wsl.exe -d kali-linux -u brion -- python3 \"/mnt/c/Brion's Memory/hooks/memory_hook.py\" UserPromptSubmit",
+            "timeout": 8,
+            "statusMessage": "Recalling from Brion's Memory"
+          }
+        ]
+      }
+    ]
+  }
+}
