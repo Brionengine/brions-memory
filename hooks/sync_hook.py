@@ -22,14 +22,14 @@ import sqlite3
 import subprocess
 import sys
 
-HOME = "/root/.local/share/brions-memory"
+HOME = os.path.expanduser("~/.local/share/brions-memory")
 MARKER = os.path.join(HOME, "last_sync")
 LOCK = os.path.join(HOME, "sync.lock")
 LOG = os.path.join(HOME, "sync.log")
 PY = os.path.join(HOME, "venv", "bin", "python")
 REPO = "/mnt/c/Brion's Memory"
-FILES = "/root/.claude/projects/*/memory/*.md"
-QMEM_DB = "/root/.qmem/qmem.db"
+FILES = os.path.expanduser("~/.claude/projects/*/memory/*.md")
+QMEM_DB = os.path.expanduser("~/.qmem/qmem.db")
 
 
 def newest_change():

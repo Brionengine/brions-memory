@@ -36,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger("brions-memory")
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "brions-memory", "version": "1.0.0"}
+SERVER_INFO = {"name": "brions-memory", "version": "1.1.0"}
 
 _store = None
 
@@ -134,6 +134,166 @@ TOOLS: List[Dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_memory",
+        "description": "Fetch one memory in full by id: content, type, importance, project, access history.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"memory_id": {"type": "string"}},
+            "required": ["memory_id"],
+        },
+    },
+    {
+        "name": "update_memory",
+        "description": (
+            "Correct or re-weight an existing memory. Changing content re-encodes its "
+            "quantum state and rebuilds its entanglements. Prefer this over storing a "
+            "contradicting memory when a fact has changed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string"},
+                "content": {"type": "string"},
+                "importance": {"type": "number"},
+                "memory_type": {"type": "string"},
+                "metadata": {"type": "object", "description": "Merged into the existing metadata."},
+            },
+            "required": ["memory_id"],
+        },
+    },
+    {
+        "name": "forget",
+        "description": (
+            "Permanently delete a memory and its entanglements. Memories are permanent by "
+            "design: call this ONLY when Brion explicitly asks for that memory to be removed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string"},
+                "confirm": {"type": "boolean", "description": "Must be true."},
+            },
+            "required": ["memory_id", "confirm"],
+        },
+    },
+    {
+        "name": "recent_memories",
+        "description": (
+            "Memories newest first, optionally within a date range, project or type. Use for "
+            "'what did we do yesterday / last week / on project X' — questions that semantic "
+            "recall cannot answer because time is not in the meaning."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 10},
+                "project": {"type": "string"},
+                "memory_types": {"type": "array", "items": {"type": "string"}},
+                "since": {"type": "string", "description": "ISO date, e.g. 2026-09-28"},
+                "until": {"type": "string", "description": "ISO date, exclusive"},
+            },
+        },
+    },
+    {
+        "name": "list_projects",
+        "description": "Every project with a memory count and the date of its latest memory.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "superposition_recall",
+        "description": (
+            "Quantum recall over several queries at once. Builds the superposed state "
+            "|psi> = sum w_i |q_i> and ranks memories by fidelity to it, so memories that "
+            "connect ALL the ideas rank above ones matching only one. Use for questions that "
+            "join topics, e.g. ['Grover search', 'mining hashrate']."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "queries": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "weights": {"type": "array", "items": {"type": "number"},
+                            "description": "Amplitude per query; equal if omitted."},
+                "limit": {"type": "integer", "default": 5},
+                "memory_types": {"type": "array", "items": {"type": "string"}},
+                "project": {"type": "string"},
+            },
+            "required": ["queries"],
+        },
+    },
+    {
+        "name": "quantum_fidelity",
+        "description": (
+            "Fidelity |<a|b>|^2 between two memories or texts (each is a memory id or free "
+            "text). 1.0 = same meaning; measured real matches 0.23-0.51; noise <= 0.11."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+            "required": ["a", "b"],
+        },
+    },
+    {
+        "name": "entanglement_path",
+        "description": (
+            "The shortest chain of entanglements connecting two memories, with the strength "
+            "of every link. Shows how two pieces of knowledge are related through others."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "memory id"},
+                "target": {"type": "string", "description": "memory id"},
+                "min_strength": {"type": "number", "default": 0.3},
+                "max_depth": {"type": "integer", "default": 4},
+            },
+            "required": ["source", "target"],
+        },
+    },
+    {
+        "name": "build_clusters",
+        "description": (
+            "Rebuild entanglement clusters: groups of memories densely entangled with each "
+            "other (Louvain communities on the entanglement graph), each with a superposed "
+            "cluster state. Replaces existing clusters. Takes a few seconds."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "min_strength": {"type": "number", "default": 0.45},
+                "min_size": {"type": "integer", "default": 3},
+                "resolution": {"type": "number", "default": 1.0,
+                               "description": "Higher = more, smaller clusters."},
+            },
+        },
+    },
+    {
+        "name": "clusters",
+        "description": (
+            "List entanglement clusters (topics) with size, strength and example memories. "
+            "With a query, ranks clusters by fidelity between the query and each cluster's "
+            "superposed state — finds whole topics rather than single memories."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
+        },
+    },
+    {
+        "name": "cluster_members",
+        "description": "The memories in one entanglement cluster, most important first.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cluster_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 30},
+            },
+            "required": ["cluster_id"],
+        },
+    },
 ]
 
 
@@ -186,11 +346,147 @@ def tool_memory_stats(args: Dict[str, Any]) -> str:
     return json.dumps(get_store().stats(), indent=2, default=str)
 
 
+def _day(ts: Any) -> str:
+    return ts.strftime("%Y-%m-%d") if ts else "unknown"
+
+
+def _format_recalls(results: List[Any]) -> str:
+    if not results:
+        return "No memories found for that query."
+    return "\n\n".join(
+        f"[{r.memory_id}] ({r.memory_type}, {_day(r.created)}, "
+        f"relevance {r.relevance:.3f}, fidelity {r.fidelity:.3f})\n{r.content}"
+        for r in results
+    )
+
+
+def tool_get_memory(args: Dict[str, Any]) -> str:
+    row = get_store().get(args["memory_id"])
+    return json.dumps(row, indent=2, default=str) if row else f"No memory {args['memory_id']}."
+
+
+def tool_update_memory(args: Dict[str, Any]) -> str:
+    imp = args.get("importance")
+    ok = get_store().update(
+        args["memory_id"],
+        content=args.get("content"),
+        importance=float(imp) if imp is not None else None,
+        memory_type=args.get("memory_type"),
+        metadata=args.get("metadata"),
+    )
+    return f"Updated {args['memory_id']}." if ok else f"No memory {args['memory_id']}."
+
+
+def tool_forget(args: Dict[str, Any]) -> str:
+    if args.get("confirm") is not True:
+        return "Not deleted: confirm must be true, and only when Brion explicitly asked."
+    ok = get_store().delete(args["memory_id"])
+    return f"Deleted {args['memory_id']}." if ok else f"No memory {args['memory_id']}."
+
+
+def tool_recent_memories(args: Dict[str, Any]) -> str:
+    rows = get_store().recent(
+        limit=int(args.get("limit", 10)),
+        project=args.get("project"),
+        memory_types=args.get("memory_types"),
+        since=args.get("since"),
+        until=args.get("until"),
+    )
+    if not rows:
+        return "No memories in that range."
+    return "\n\n".join(
+        f"[{r['memory_id']}] ({r['memory_type']}, {_day(r['creation_time'])}, "
+        f"{r['project'] or 'no project'})\n{r['content_text']}"
+        for r in rows
+    )
+
+
+def tool_list_projects(args: Dict[str, Any]) -> str:
+    return "\n".join(f"{r['project']}: {r['n']} memories, latest {_day(r['latest'])}"
+                     for r in get_store().projects())
+
+
+def tool_superposition_recall(args: Dict[str, Any]) -> str:
+    return _format_recalls(get_store().recall_superposition(
+        queries=args["queries"],
+        weights=args.get("weights"),
+        limit=int(args.get("limit", 5)),
+        memory_types=args.get("memory_types"),
+        project=args.get("project"),
+    ))
+
+
+def tool_quantum_fidelity(args: Dict[str, Any]) -> str:
+    overlap, ta, tb = get_store().overlap(args["a"], args["b"])
+    fid = abs(overlap) ** 2
+    verdict = ("same meaning" if fid > 0.8 else "strongly related" if fid > 0.23
+               else "weakly related" if fid > 0.11 else "unrelated (noise level)")
+    return (f"fidelity |<a|b>|^2 = {fid:.4f}  ({verdict})\n"
+            f"overlap <a|b> = {overlap.real:+.4f}{overlap.imag:+.4f}i\n"
+            f"a: {ta[:200]}\nb: {tb[:200]}")
+
+
+def tool_entanglement_path(args: Dict[str, Any]) -> str:
+    path = get_store().entanglement_path(
+        args["source"], args["target"],
+        min_strength=float(args.get("min_strength", 0.3)),
+        max_depth=int(args.get("max_depth", 4)),
+    )
+    if path is None:
+        return "No entanglement path within that depth and strength."
+    lines = []
+    for step in path:
+        link = "start" if step["strength"] is None else f"link {step['strength']:.3f}"
+        lines.append(f"{link} -> [{step['memory_id']}] ({step['memory_type']})\n"
+                     f"    {(step['content'] or '')[:240]}")
+    return f"{len(path) - 1} link(s):\n" + "\n".join(lines)
+
+
+def tool_build_clusters(args: Dict[str, Any]) -> str:
+    return json.dumps(get_store().build_clusters(
+        min_strength=float(args.get("min_strength", 0.45)),
+        min_size=int(args.get("min_size", 3)),
+        resolution=float(args.get("resolution", 1.0)),
+    ), indent=2)
+
+
+def tool_clusters(args: Dict[str, Any]) -> str:
+    rows = get_store().clusters(limit=int(args.get("limit", 10)), query=args.get("query"))
+    if not rows:
+        return "No clusters yet. Run build_clusters first."
+    out = []
+    for r in rows:
+        fid = f", fidelity {r['fidelity']:.3f}" if "fidelity" in r else ""
+        examples = "\n".join(f"    - {e[:160]}" for e in r["examples"])
+        out.append(f"[{r['cluster_id']}] {r['size']} memories, {r['cluster_type']}, "
+                   f"strength {r['cluster_strength']:.3f}{fid}\n{examples}")
+    return "\n\n".join(out)
+
+
+def tool_cluster_members(args: Dict[str, Any]) -> str:
+    rows = get_store().cluster_members(args["cluster_id"], int(args.get("limit", 30)))
+    if not rows:
+        return f"No cluster {args['cluster_id']}."
+    return "\n\n".join(f"[{r['memory_id']}] ({r['memory_type']}, {_day(r['creation_time'])})\n"
+                       f"{r['content_text'][:400]}" for r in rows)
+
+
 HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "remember": tool_remember,
     "recall": tool_recall,
     "related": tool_related,
     "memory_stats": tool_memory_stats,
+    "get_memory": tool_get_memory,
+    "update_memory": tool_update_memory,
+    "forget": tool_forget,
+    "recent_memories": tool_recent_memories,
+    "list_projects": tool_list_projects,
+    "superposition_recall": tool_superposition_recall,
+    "quantum_fidelity": tool_quantum_fidelity,
+    "entanglement_path": tool_entanglement_path,
+    "build_clusters": tool_build_clusters,
+    "clusters": tool_clusters,
+    "cluster_members": tool_cluster_members,
 }
 
 

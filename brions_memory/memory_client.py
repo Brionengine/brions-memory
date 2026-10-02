@@ -19,7 +19,7 @@ fail open. Every function returns empty and records the reason in last_error().
 
 Configuration, first source that answers:
     env  BRIONS_MEMORY_URL, BRIONS_MEMORY_TOKEN, BRIONS_MEMORY_CAFILE
-    file /root/.config/brions-memory/client.json  (same file the hooks read)
+    file ~/.config/brions-memory/client.json  (same file the hooks read)
 
 **Scope.** recall() returns whatever matches, including personal and infrastructure
 memories. Anything serving other people (a public endpoint, a shared agent) must gate
@@ -35,7 +35,7 @@ import ssl
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-CONFIG_FILE = os.environ.get("BRIONS_MEMORY_CLIENT_CONFIG", "/root/.config/brions-memory/client.json")
+CONFIG_FILE = os.environ.get("BRIONS_MEMORY_CLIENT_CONFIG", os.path.expanduser("~/.config/brions-memory/client.json"))
 TIMEOUT_S = float(os.environ.get("BRIONS_MEMORY_TIMEOUT", "4"))
 MIN_FIDELITY = 0.18      # measured: real matches 0.23-0.51, noise <= 0.106
 MAX_ITEM_CHARS = 600

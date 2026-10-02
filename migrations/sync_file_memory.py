@@ -5,7 +5,7 @@ Sync Claude Code's file memories into Brion's Memory.
 Why: the cloud store stopped learning on 2026-09-13. Everything in it came from a
 one-time import of claude-mem, and claude-mem itself stopped writing on 09-12. Meanwhile
 Claude Code keeps curated, one-fact-per-file memories under
-/root/.claude/projects/*/memory/*.md -- the measured results, standing rules and
+~/.claude/projects/*/memory/*.md -- the measured results, standing rules and
 corrections that recall most needs. This makes those reach the recall hook.
 
 One file = one memory, keyed by its path. Re-running is safe:
@@ -35,7 +35,7 @@ from migrations.import_history import redact  # noqa: E402  same secret patterns
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("sync-file-memory")
 
-ROOT = Path("/root/.claude/projects")
+ROOT = Path.home() / ".claude" / "projects"
 SOURCE = "claude-code/file-memory"
 # feedback files are guidance on how to work -> procedural; the rest are facts -> semantic
 TYPE_MAP = {"feedback": "procedural"}
