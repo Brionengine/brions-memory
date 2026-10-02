@@ -13,7 +13,7 @@ recall pulls in what a strong match is entangled with. Memories are permanent.
 |---|---|
 | `brions_memory/encoder.py` | 384-D semantic embedding + complex quantum state. Fidelity = cos² exactly. |
 | `brions_memory/store.py` | Postgres store: recall, entanglement |
-| `brions_memory/mcp_server.py` | MCP over stdio. Memory: `remember`, `recall`, `related`, `get_memory`, `update_memory`, `forget`, `recent_memories`, `list_projects`, `memory_stats`. Quantum: `superposition_recall`, `quantum_fidelity`, `entanglement_path`, `build_clusters`, `clusters`, `cluster_members` |
+| `brions_memory/mcp_server.py` | MCP over stdio. Memory: `remember`, `recall`, `related`, `get_memory`, `update_memory`, `forget`, `archived_memories`, `restore_memory`, `recent_memories`, `list_projects`, `memory_stats`. Quantum: `superposition_recall`, `quantum_fidelity`, `entanglement_path`, `build_clusters`, `clusters`, `cluster_members` |
 | `brions_memory/memory_client.py` | Stdlib-only recall client for AIs that are not MCP clients |
 | `sql/001_schema.sql` | Cloud schema |
 | `migrations/import_history.py` | Imports claude-mem + the Dec 2025 system; redacts credentials |
@@ -63,5 +63,6 @@ works when Claude Code is started from this directory.
 
 - Memories are permanent (2026-09-13). Relevance is fidelity × importance weight and nothing
   time-based; importance never changes on its own and nothing deletes a memory except an explicit request.
+- No tool call destroys a memory (2026-10-02). `forget` and `update_memory` are reachable by an LLM that reads untrusted text, and a model-supplied confirm flag authorises nothing, so both copy the old row to `memory_archive` (`sql/002_memory_archive.sql`) and `restore_memory` undoes either.
 - Memory type is a query filter, not a phase in the quantum state (both phase variants measured badly).
 - Entanglement strength blends |cos|, not cos²; relevance uses importance/(1+importance).
