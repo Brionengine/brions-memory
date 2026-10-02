@@ -4,7 +4,8 @@
 -- untrusted text (web pages, recalled memories) that could ask it to. A model
 -- supplied "confirm" flag authorises nothing, so instead nothing is destroyed:
 -- forget moves the row here before deleting it, update_memory copies the old
--- version here before overwriting it, and restore_memory brings either back.
+-- version here before overwriting it. Restoring or erasing is human-only:
+-- python -m brions_memory.archive (not an MCP tool, so injected text cannot reach it).
 --
 -- Same columns as memory_nodes (LIKE), but memory_id is not unique: one memory
 -- can have many archived versions. Entanglements are not archived; they are

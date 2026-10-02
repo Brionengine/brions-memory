@@ -358,10 +358,10 @@ class MemoryStore:
         return cur.rowcount > 0
 
     def archived(self, memory_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
-        """Archived versions, newest first: forgotten memories and pre-edit copies."""
+        """Archived versions, newest first -- metadata only; text stays out of LLM reach."""
         with self.cursor() as cur:
             return cur.execute(
-                """SELECT archive_id, memory_id, archive_reason, archived_at, memory_type, content_text
+                """SELECT archive_id, memory_id, archive_reason, archived_at, memory_type
                      FROM memory_archive
                     WHERE (%(mid)s::text IS NULL OR memory_id = %(mid)s)
                  ORDER BY archived_at DESC LIMIT %(limit)s""",
