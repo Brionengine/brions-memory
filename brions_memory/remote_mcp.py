@@ -10,7 +10,7 @@ memories, so this serves both halves itself, standard library only:
   OAuth 2.1 authorization server  -- discovery metadata, dynamic client
       registration, PKCE (S256) authorization code + refresh tokens. "Logging
       in" is typing Brion's passphrase on /authorize. Five wrong tries lock the
-      form for 15 minutes. Tokens are stored only as SHA-256 hashes.
+      form for that address for 15 minutes. Tokens are stored only as SHA-256 hashes.
       Registration is CLOSED unless Brion opens it (--open-registration, 15
       minutes) and closes again on the first successful login: otherwise anyone
       could register their own ChatGPT connector here and phish Brion with a
@@ -204,24 +204,31 @@ class OAuthStore:
 
 class Lockout:
     """
-    Passphrase attempts run one at a time, with the lockout check inside the same
-    lock. Checking first and recording the failure after the (slow) scrypt let a
-    burst of parallel guesses all pass the check before any failure was counted.
+    Failed passphrases lock out the address they came from, not everyone.
+
+    A single global counter let anyone keep Brion locked out forever with five bad
+    guesses every 15 minutes. Per source is safe because guessing is hopeless anyway
+    (the passphrase is ~124 bits); the lockout only slows a host down. The login
+    page runs in Brion's own browser, so his attempts come from his address, not
+    from OpenAI's servers that an attacker could share.
+
+    Attempts still run one at a time with the check inside the lock: checking first
+    and recording the failure after the slow scrypt let parallel guesses all pass.
     """
     def __init__(self):
-        self.fails: list = []
+        self.fails: Dict[str, list] = {}
         self.lock = threading.Lock()
 
-    def attempt(self, check) -> Optional[bool]:
-        """None when locked out; otherwise the result of check(), counting failures."""
+    def attempt(self, source: str, check) -> Optional[bool]:
+        """None when `source` is locked out; otherwise check()'s result, counting failures."""
         with self.lock:
             cutoff = time.time() - LOCKOUT_WINDOW
-            self.fails = [t for t in self.fails if t > cutoff]
-            if len(self.fails) >= LOCKOUT_FAILS:
+            self.fails = {k: kept for k, v in self.fails.items() if (kept := [t for t in v if t > cutoff])}
+            if len(self.fails.get(source, ())) >= LOCKOUT_FAILS:
                 return None
             ok = bool(check())
             if not ok:
-                self.fails.append(time.time())
+                self.fails.setdefault(source, []).append(time.time())
             return ok
 
 
@@ -432,11 +439,12 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
             problem = self._check_authz(p)
             if problem:
                 return self._send(400, f"<p>{html.escape(problem)}</p>", "text/html; charset=utf-8")
-            ok = lockout.attempt(lambda: check_passphrase(p.get("passphrase", ""), pass_hash))
+            source = self.headers.get("X-Forwarded-For") or self.client_address[0]   # set by Caddy
+            ok = lockout.attempt(source, lambda: check_passphrase(p.get("passphrase", ""), pass_hash))
             if ok is None:
                 return self._authorize_form(p, "Too many attempts. Try again in 15 minutes.")
             if not ok:
-                logger.warning("failed passphrase from %s", self.headers.get("X-Forwarded-For", "?"))
+                logger.warning("failed passphrase from %s", source)
                 return self._authorize_form(p, "Wrong passphrase.")
             code = store.issue_code(p["client_id"], p["redirect_uri"], p["code_challenge"])
             query = {"code": code}
