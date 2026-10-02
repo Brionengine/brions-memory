@@ -1,0 +1,30 @@
+{
+  "name": "brions-memory",
+  "version": "1.3.0",
+  "description": "Brion's long-term memory: automatic recall before every message, plus quantum memory tools.",
+  "author": {
+    "name": "Brion",
+    "url": "https://github.com/Brionengine/brions-memory"
+  },
+  "homepage": "https://github.com/Brionengine/brions-memory",
+  "repository": "https://github.com/Brionengine/brions-memory",
+  "keywords": ["memory", "mcp", "quantum", "recall"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Brion's Memory",
+    "shortDescription": "Brion's long-term memory, recalled automatically in every session.",
+    "longDescription": "Connects Codex to Brion's Memory, the same cloud memory Claude Code and ChatGPT use. Relevant memories are recalled before every message, and tools let Codex search, follow entanglements, browse topic clusters and remember new facts.",
+    "developerName": "Brion",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/Brionengine/brions-memory",
+    "defaultPrompt": [
+      "What do you remember about what I was working on most recently?",
+      "Recall everything we measured about the quantum hardware runs.",
+      "Remember this decision and why we made it."
+    ],
+    "brandColor": "#3A83F7"
+  }
+}
