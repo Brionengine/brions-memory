@@ -62,7 +62,9 @@ works when Claude Code is started from this directory.
 
 ## Remote MCP for ChatGPT
 
-ChatGPT cannot launch a local server; its connectors take a public HTTPS URL with OAuth or nothing. `remote_mcp.py` is both the OAuth 2.1 server (discovery, dynamic registration restricted to ChatGPT/OpenAI redirect hosts, PKCE S256, rotating refresh tokens, hashed token storage, 5-try lockout) and the MCP endpoint (`POST /mcp`). Deployed as `brions-memory-remote.service` behind Caddy (Let's Encrypt) on an OVH AMD server; config in `/etc/brions-memory/remote.env` (mode 640), tokens in `/var/lib/brions-memory`. Caddy's access log drops query codes, `Authorization` and `Location`. Passphrase hash: `python -m brions_memory.remote_mcp --hash-passphrase '<passphrase>'`.
+ChatGPT cannot launch a local server; its connectors take a public HTTPS URL with OAuth or nothing. `remote_mcp.py` is both the OAuth 2.1 server (discovery, dynamic registration restricted to ChatGPT/OpenAI redirect hosts, PKCE S256, rotating refresh tokens, hashed token storage, serialised 5-try lockout, owner-opened registration window) and the MCP endpoint (`POST /mcp`). Deployed as `brions-memory-remote.service` behind Caddy (Let's Encrypt) on an OVH AMD server; config in `/etc/brions-memory/remote.env` (mode 640), tokens in `/var/lib/brions-memory`. Caddy's access log drops query codes, `Authorization` and `Location`. Passphrase hash: `python -m brions_memory.remote_mcp --hash-passphrase '<passphrase>'`.
+
+Registration is closed by default — otherwise anyone could register their own connector and phish Brion with a link to the real login page. Open it right before connecting (it closes on the first successful login): on the server, `brions-memory-registration open` (15 min) / `close`.
 
 In ChatGPT: Settings → Apps & Connectors → Advanced → Developer mode on → Create → URL `https://<host>/mcp`, Authentication **OAuth** → sign in with the passphrase.
 

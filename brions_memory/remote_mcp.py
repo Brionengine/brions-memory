@@ -11,6 +11,10 @@ memories, so this serves both halves itself, standard library only:
       registration, PKCE (S256) authorization code + refresh tokens. "Logging
       in" is typing Brion's passphrase on /authorize. Five wrong tries lock the
       form for 15 minutes. Tokens are stored only as SHA-256 hashes.
+      Registration is CLOSED unless Brion opens it (--open-registration, 15
+      minutes) and closes again on the first successful login: otherwise anyone
+      could register their own ChatGPT connector here and phish Brion with a
+      link to this real login page, getting tokens for their own account.
   MCP over Streamable HTTP        -- POST /mcp, JSON responses, bearer token
       required. Delegates to mcp_server.handle(), exposing a subset of tools.
 
@@ -167,19 +171,51 @@ class OAuthStore:
 # ---------------------------------------------------------------------------
 
 class Lockout:
+    """
+    Passphrase attempts run one at a time, with the lockout check inside the same
+    lock. Checking first and recording the failure after the (slow) scrypt let a
+    burst of parallel guesses all pass the check before any failure was counted.
+    """
     def __init__(self):
         self.fails: list = []
         self.lock = threading.Lock()
 
-    def locked(self) -> bool:
+    def attempt(self, check) -> Optional[bool]:
+        """None when locked out; otherwise the result of check(), counting failures."""
         with self.lock:
             cutoff = time.time() - LOCKOUT_WINDOW
             self.fails = [t for t in self.fails if t > cutoff]
-            return len(self.fails) >= LOCKOUT_FAILS
+            if len(self.fails) >= LOCKOUT_FAILS:
+                return None
+            ok = bool(check())
+            if not ok:
+                self.fails.append(time.time())
+            return ok
 
-    def fail(self) -> None:
-        with self.lock:
-            self.fails.append(time.time())
+
+class RegistrationWindow:
+    """A file holding an expiry time; present and unexpired = registration open."""
+    def __init__(self, path: str):
+        self.path = path
+
+    def open_for(self, minutes: float) -> float:
+        expires = time.time() + minutes * 60
+        with open(self.path, "w") as fh:
+            fh.write(str(expires))
+        return expires
+
+    def is_open(self) -> bool:
+        try:
+            with open(self.path) as fh:
+                return float(fh.read().strip()) > time.time()
+        except (OSError, ValueError):
+            return False
+
+    def close(self) -> None:
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
 
 
 def _redirect_ok(uri: str) -> bool:
@@ -205,12 +241,15 @@ input{{width:100%;box-sizing:border-box;padding:10px;margin:12px 0;border-radius
 background:#0f1115;color:#e8e8e8}}button{{width:100%;padding:10px;border:0;border-radius:8px;background:#3a83f7;
 color:#fff;font-weight:600}}.e{{color:#ff7b72}}p{{color:#aaa;font-size:14px}}</style></head><body>
 <form method="post" action="/authorize"><h2>Brion's Memory</h2>
-<p>Allow <b>{client}</b> to use your memory.</p>{error}
+<p>Allow <b>{client}</b> to use your memory.</p>
+<p class="e">Only continue if you clicked <b>Connect</b> in ChatGPT yourself just now.
+If someone sent you this link, close this page.</p>{error}
 <input type="password" name="passphrase" placeholder="Passphrase" autofocus autocomplete="current-password">
 {hidden}<button type="submit">Allow</button></form></body></html>"""
 
 
-def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lockout):
+def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lockout,
+                 window: RegistrationWindow):
     resource = public_url + "/mcp"
     as_meta = {
         "issuer": public_url,
@@ -293,6 +332,10 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
 
         def _register(self) -> None:
             meta = json.loads(self._body() or b"{}")
+            if not window.is_open():
+                logger.warning("registration refused (closed) from %s", self.headers.get("X-Forwarded-For", "?"))
+                return self._send(403, {"error": "access_denied",
+                                        "error_description": "registration is closed; the owner must open it"})
             uris = meta.get("redirect_uris") or []
             if not uris or not all(isinstance(u, str) and _redirect_ok(u) for u in uris):
                 return self._send(400, {"error": "invalid_redirect_uri",
@@ -334,10 +377,10 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
             problem = self._check_authz(p)
             if problem:
                 return self._send(400, f"<p>{html.escape(problem)}</p>", "text/html; charset=utf-8")
-            if lockout.locked():
+            ok = lockout.attempt(lambda: check_passphrase(p.get("passphrase", ""), pass_hash))
+            if ok is None:
                 return self._authorize_form(p, "Too many attempts. Try again in 15 minutes.")
-            if not check_passphrase(p.get("passphrase", ""), pass_hash):
-                lockout.fail()
+            if not ok:
                 logger.warning("failed passphrase from %s", self.headers.get("X-Forwarded-For", "?"))
                 return self._authorize_form(p, "Wrong passphrase.")
             code = store.issue_code(p["client_id"], p["redirect_uri"], p["code_challenge"])
@@ -360,6 +403,7 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
                 if (p.get("client_id") != client_id or p.get("redirect_uri") != redirect_uri
                         or not hmac.compare_digest(computed, challenge)):
                     return self._send(400, {"error": "invalid_grant"})
+                window.close()                  # connected: no more registrations until reopened
                 return self._send(200, store.issue_tokens(client_id))
             if grant == "refresh_token":
                 client_id = p.get("client_id", "")
@@ -410,13 +454,25 @@ def main() -> None:
     if len(sys.argv) == 3 and sys.argv[1] == "--hash-passphrase":
         print(hash_passphrase(sys.argv[2]))
         return
+    oauth_db = os.environ.get("BRIONS_MEMORY_OAUTH_DB", "/var/lib/brions-memory/oauth.db")
+    window = RegistrationWindow(os.path.join(os.path.dirname(oauth_db), "registration-open"))
+    if len(sys.argv) >= 2 and sys.argv[1] == "--open-registration":
+        minutes = float(sys.argv[2]) if len(sys.argv) > 2 else 15
+        expires = window.open_for(minutes)
+        print(f"Registration open until {time.strftime('%H:%M:%S %Z', time.localtime(expires))}; "
+              "it closes on the first successful connection.")
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "--close-registration":
+        window.close()
+        print("Registration closed.")
+        return
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(levelname)s %(message)s")
     public_url = os.environ["BRIONS_MEMORY_PUBLIC_URL"].rstrip("/")
     pass_hash = os.environ["BRIONS_MEMORY_OAUTH_PASSPHRASE_HASH"]
-    store = OAuthStore(os.environ.get("BRIONS_MEMORY_OAUTH_DB", "/var/lib/brions-memory/oauth.db"))
+    store = OAuthStore(oauth_db)
     port = int(os.environ.get("BRIONS_MEMORY_REMOTE_PORT", "8460"))
     mcp_server.get_store()                      # load the embedding model before the first request
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(store, public_url, pass_hash, Lockout()))
+    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(store, public_url, pass_hash, Lockout(), window))
     logger.info("Remote MCP for %s listening on 127.0.0.1:%d", public_url, port)
     server.serve_forever()
 
