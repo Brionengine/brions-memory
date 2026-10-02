@@ -67,7 +67,9 @@ REFRESH_TTL = 30 * 86400
 CODE_TTL = 300
 MAX_BODY = 256 * 1024
 LOCKOUT_FAILS, LOCKOUT_WINDOW = 5, 900
-MAX_REGISTRATIONS_PER_WINDOW = 3
+# Per registration window. Loose on purpose: ChatGPT registers from OpenAI's servers, so Brion's
+# ChatGPT and anyone else's can share a source address; this only stops one host flooding the table.
+REGISTRATIONS_PER_SOURCE = 20
 
 
 # ---------------------------------------------------------------------------
@@ -110,17 +112,32 @@ class OAuthStore:
                                                   challenge TEXT, expires REAL);
                 CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, kind TEXT, client_id TEXT, expires REAL);
             """)
-            if "trusted" not in [r[1] for r in db.execute("PRAGMA table_info(clients)")]:
+            cols = [r[1] for r in db.execute("PRAGMA table_info(clients)")]
+            if "trusted" not in cols:
                 db.execute("ALTER TABLE clients ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0")
+            if "source" not in cols:
+                db.execute("ALTER TABLE clients ADD COLUMN source TEXT")
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
 
-    def register(self, redirect_uris: list) -> str:
+    def register(self, redirect_uris: list, source: str, since: float, per_source: int) -> Optional[str]:
+        """
+        Register unless `source` already made `per_source` registrations since `since`.
+
+        The count and the insert happen under one lock and one transaction; counting
+        first and inserting separately let parallel requests all pass the count.
+        The limit is per source, not global: a global cap let anyone fill every slot
+        the moment Brion opened the window and lock his own ChatGPT out.
+        """
         client_id = "bm_" + secrets.token_urlsafe(18)
         with self.lock, self._db() as db:
-            db.execute("INSERT INTO clients (client_id, redirect_uris, created) VALUES (?, ?, ?)",
-                       (client_id, json.dumps(redirect_uris), time.time()))
+            used = db.execute("SELECT count(*) FROM clients WHERE source = ? AND created >= ?",
+                              (source, since)).fetchone()[0]
+            if used >= per_source:
+                return None
+            db.execute("INSERT INTO clients (client_id, redirect_uris, created, source) VALUES (?, ?, ?, ?)",
+                       (client_id, json.dumps(redirect_uris), time.time(), source))
         return client_id
 
     def client(self, client_id: str) -> Optional[Dict[str, Any]]:
@@ -129,9 +146,9 @@ class OAuthStore:
                              (client_id,)).fetchone()
         return {"redirect_uris": json.loads(row[0]), "created": row[1], "trusted": bool(row[2])} if row else None
 
-    def registered_since(self, since: float) -> int:
-        with self._db() as db:
-            return db.execute("SELECT count(*) FROM clients WHERE created >= ?", (since,)).fetchone()[0]
+    def drop_untrusted(self) -> int:
+        with self.lock, self._db() as db:
+            return db.execute("DELETE FROM clients WHERE trusted = 0").rowcount
 
     def trust_only(self, client_id: str) -> int:
         """Trust the client that just logged in and drop every never-used registration."""
@@ -361,14 +378,19 @@ def make_handler(store: OAuthStore, public_url: str, pass_hash: str, lockout: Lo
                 logger.warning("registration refused (closed) from %s", self.headers.get("X-Forwarded-For", "?"))
                 return self._send(403, {"error": "access_denied",
                                         "error_description": "registration is closed; the owner must open it"})
-            if store.registered_since(opened) >= MAX_REGISTRATIONS_PER_WINDOW:
-                logger.warning("registration refused (window full) from %s", self.headers.get("X-Forwarded-For", "?"))
-                return self._send(403, {"error": "access_denied", "error_description": "registration window is full"})
+
             uris = meta.get("redirect_uris") or []
             if not uris or not all(isinstance(u, str) and _redirect_ok(u) for u in uris):
                 return self._send(400, {"error": "invalid_redirect_uri",
                                         "error_description": "redirect URIs must be ChatGPT/OpenAI https URLs"})
-            client_id = store.register(uris)
+            # Caddy overwrites X-Forwarded-For with the real peer (header_up), and this server only
+            # listens on 127.0.0.1, so the value cannot be supplied by the client.
+            source = self.headers.get("X-Forwarded-For") or self.client_address[0]
+            client_id = store.register(uris, source, opened, REGISTRATIONS_PER_SOURCE)
+            if client_id is None:
+                logger.warning("registration refused (per-source limit) from %s", source)
+                return self._send(429, {"error": "access_denied",
+                                        "error_description": "too many registrations from this address"})
             self._send(201, {"client_id": client_id, "redirect_uris": uris,
                              "token_endpoint_auth_method": "none",
                              "grant_types": ["authorization_code", "refresh_token"],
@@ -493,7 +515,10 @@ def main() -> None:
     window = RegistrationWindow(os.path.join(os.path.dirname(oauth_db), "registration-open"))
     if len(sys.argv) >= 2 and sys.argv[1] == "--open-registration":
         minutes = float(sys.argv[2]) if len(sys.argv) > 2 else 15
+        dropped = OAuthStore(oauth_db).drop_untrusted()     # every window starts clean
         expires = window.open_for(minutes)
+        if dropped:
+            print(f"Removed {dropped} unused registration(s) from earlier windows.")
         print(f"Registration open until {time.strftime('%H:%M:%S %Z', time.localtime(expires))}; "
               "it closes on the first successful connection.")
         return
