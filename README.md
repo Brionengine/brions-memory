@@ -13,7 +13,7 @@ recall pulls in what a strong match is entangled with. Memories are permanent.
 |---|---|
 | `brions_memory/encoder.py` | 384-D semantic embedding + complex quantum state. Fidelity = cos² exactly. |
 | `brions_memory/store.py` | Postgres store: recall, entanglement |
-| `brions_memory/mcp_server.py` | MCP over stdio. Tools: `remember`, `recall`, `related`, `memory_stats` |
+| `brions_memory/mcp_server.py` | MCP over stdio. Memory: `remember`, `recall`, `related`, `get_memory`, `update_memory`, `forget`, `recent_memories`, `list_projects`, `memory_stats`. Quantum: `superposition_recall`, `quantum_fidelity`, `entanglement_path`, `build_clusters`, `clusters`, `cluster_members` |
 | `brions_memory/memory_client.py` | Stdlib-only recall client for AIs that are not MCP clients |
 | `sql/001_schema.sql` | Cloud schema |
 | `migrations/import_history.py` | Imports claude-mem + the Dec 2025 system; redacts credentials |
@@ -53,6 +53,8 @@ chat at brionquantum.com is the live example: he must not inherit this by defaul
 claude mcp list                                    # should show brions-memory ✔ Connected
 set -a; . ./.env; set +a; psql "$BRIONS_MEMORY_DB_URL"
 ```
+
+Since 2026-10-02 Claude Code runs as `brion`, not root: the venv is `~/.local/share/brions-memory/venv` (Python 3.14), the MCP launcher is `~/.local/share/brions-memory/run-mcp.sh` (sources `.env`), and the hooks read `~/.config/brions-memory/client.json`. Paths in hooks and sync scripts resolve from `~`.
 
 Re-registering the MCP server requires `PYTHONPATH="/mnt/c/Brion's Memory"`, or it only
 works when Claude Code is started from this directory.
